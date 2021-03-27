@@ -1,0 +1,147 @@
+---
+title: "Unmarried men in DK"
+author: "Emil B. Thomsen"
+date: "27/03/2021 updated"
+output:
+  rmdformats::readthedown:
+    highlight: kate
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+library(rmdformats)
+
+## Global options
+options(max.print="75")
+opts_chunk$set(echo=TRUE,
+	             cache=TRUE,
+               prompt=FALSE,
+               tidy=TRUE,
+               comment=NA,
+               message=FALSE,
+               warning=FALSE)
+opts_knit$set(width=75)
+```
+
+
+## Loading the packages:
+```{r}
+# Library 
+library(raster)
+library(rgeos)
+library(sf)
+library(tidyverse)
+library(htmltools)
+library(googlesheets4)
+library(mapview)
+```
+
+## HW Question
+
+__1) test for the autocorrelation of the distribution of single women OR single men in Denmark during 2020, and answer the question: "Is the population of single women/men in Denmark spatially correlated? What is the correlation and how significant is the trend?__
+
+<\br>
+### Loading data:
+
+```{r}
+# Have to run this in order to download the spreadsheet.
+gs4_deauth()
+
+#Downloading spreadsheet
+relationsship_status <- read_sheet("https://docs.google.com/spreadsheets/d/1xcrd07gV3Sm0fuzSIWu2Op36oDBmvvrlHU9uNz49kuU/edit#gid=0")
+
+
+#Creating subdata set. The assignment focusses on unmarried men.
+men <- subset(relationsship_status, Sex == "Mænd")
+unmarried_men <- subset(men, Status == "Ugift")
+
+#If I wish to work with the ladies.
+women <- subset(relationsship_status, Sex == "Kvinder")
+
+#checking unique number different single status.
+unique(relationsship_status$Status)
+```
+When looking at the unique relationship statuses in the data set it can be seen that it contains 4 different types of relationship status: "unmarried", "married/separeret", "widow/widower" and "Divorced". These categories does actually not say anything about people being single. To simplify the assignment I will look at the distribution of unmarried men.
+
+<\br>
+
+## Creating map of DK
+
+```{r}
+#Loading data from datafolder:
+mun_sp <- readRDS("data/gadm36_DNK_2_sp.rds")
+mun_sf <- st_as_sf(mun_sp)
+mun <- st_transform(mun_sf, crs = 32632)
+mapview(mun)
+
+sort(mun$NAME_2)
+which(grepl("Å",mun$NAME_2))
+which(grepl("Vest",mun$NAME_2))
+
+mun$NAME_2[31] <- "Aarhus"
+mun$NAME_2[21] <- "Høje-Taastrup"
+mun$NAME_2[60] <- "Vesthimmerlands"
+head(mun)
+```
+
+## Creating map of unmarried danish men
+
+```{r}
+# Creating a data frame containing the sum of all men in the different municipalities, that means the sum of men who are "Ugift", "Gift/separeret", "Enke/enkemand" or "Fraskilt".
+men_sum <- men %>% 
+  group_by(Region) %>% 
+  summarize(sum2020 = sum(Y2020K1))
+
+
+# Creating a new data frame by merging the sum DF with the unmarried_men DF. Then adding a column in the new DF with the unmarried percentage of men.
+men_pct <- mun %>% 
+  select(NAME_2) %>% 
+  merge(unmarried_men, by.x = "NAME_2",by.y ="Region") %>% 
+  merge(men_sum, by.x = "NAME_2",by.y ="Region") %>% 
+  group_by(NAME_2, Status) %>% 
+    mutate(pct_unmaried = Y2020K1/sum2020*100)
+
+
+
+#Mapping the men_pct DF onto the map of DK
+men_pct %>% 
+  group_by(NAME_2) %>% 
+  select(pct_unmaried) %>% 
+  mapview()
+
+```
+Ass we can see on the map it looks like there is a spatial correlation of unmarried men in Denmark. To be sure about it a moran test can be performed:
+
+
+## Defining neighbors.
+
+```{r}
+library(spdep)
+# Plotting the geometry column
+plot(men_pct$geometry)
+
+#finding the neighbors of each polygon:
+nb <- poly2nb(men_pct$geometry)
+nb
+
+#Finding centerpoints of each municipality
+mun_centers <- st_coordinates(st_centroid(men_pct$geometry))
+
+#plotting
+plot(men_pct$geometry); plot(nb, mun_centers, col = "red",add = TRUE)
+
+```
+
+## Moran's I test
+
+```{r}
+options(scipen = 999)
+moran.test(men_pct$pct_unmaried, 
+           nb2listw(nb, style = "W",zero.policy=TRUE),
+           zero.policy=TRUE)
+
+
+moran.mc(men_pct$pct_unmaried,nb2listw(nb, zero.policy=TRUE),zero.policy=TRUE, nsim = 999)
+
+```
+The p-values from the moran and monte carlo are lower that the recomended 5%. more precisely in the moran test 0.6% and 0.2 procent. This means that the probability of that the distribution of umarried men in Denmark has a 0.2% of being random. that means. 
